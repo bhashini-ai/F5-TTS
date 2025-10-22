@@ -1,3 +1,10 @@
-FROM nvcr.io/nvidia/tritonserver:24.12-py3
-RUN pip install tritonclient[grpc] tensorrt-llm==0.16.0 torchaudio==2.5.1 jieba pypinyin librosa vocos
+FROM nvcr.io/nvidia/tritonserver:24.12-trtllm-python-py3
+RUN pip install tritonclient[grpc] jieba pypinyin librosa
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        cmake build-essential sox libsox-dev libsox-fmt-all && \
+    pip install --no-cache-dir --no-build-isolation git+https://github.com/pytorch/audio.git@release/2.6 && \
+    apt-get purge -y cmake build-essential && \
+    apt-get autoremove -y && \
+    rm -rf /var/lib/apt/lists/*
+RUN pip install vocos
 WORKDIR /workspace
