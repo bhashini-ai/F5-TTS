@@ -7,4 +7,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     apt-get autoremove -y && \
     rm -rf /var/lib/apt/lists/*
 RUN pip install vocos
+COPY --from=nvcr.io/nvidia/tritonserver:24.12-py3 /opt/tritonserver/backends/tensorrt /opt/tritonserver/backends/tensorrt
+COPY --from=nvcr.io/nvidia/tensorrt:24.12-py3 /usr/src/tensorrt/bin/trtexec /usr/src/tensorrt/bin/trtexec
 WORKDIR /workspace
