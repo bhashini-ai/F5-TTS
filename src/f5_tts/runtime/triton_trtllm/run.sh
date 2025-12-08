@@ -45,7 +45,7 @@ if [ $stage -le 3 ] && [ $stop_stage -ge 3 ]; then
     echo "Building triton server"
     rm -r $MODEL_REPO
     cp -r ./model_repo_f5_tts $MODEL_REPO
-    python3 scripts/fill_template.py -i $MODEL_REPO/f5_tts/config.pbtxt vocab:$vocab_file,model:$ckpt_file,trtllm:$TRTLLM_ENGINE_DIR,vocoder:vocos
+    python3 scripts/fill_template.py -i $MODEL_REPO/f5_tts/config.pbtxt vocab:$vocab_file,model:$ckpt_file,trtllm:$TRTLLM_ENGINE_DIR,vocoder:vocos,name:f5-tts
     cp $VOCODER_TRT_ENGINE_PATH $MODEL_REPO/vocoder/1/vocoder.plan
 fi
 
