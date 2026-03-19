@@ -235,6 +235,8 @@ class TritonPythonModel:
     def forward_vocoder(self, mel, vocoder_name):
         vocoder_model_name = "vocoder" if vocoder_name == "vocos" else "vocoder_bigvgan"
         mel = mel.to(torch.float32).contiguous().cpu()
+        if vocoder_name == "bigvgan" and mel.ndim == 3 and mel.shape[0] == 1:
+            mel = mel.squeeze(0)
         input_tensor_0 = pb_utils.Tensor.from_dlpack("mel", to_dlpack(mel))
 
         inference_request = pb_utils.InferenceRequest(
