@@ -10,29 +10,26 @@ class TritonPythonModel:
     def initialize(self, args):
         model_config = json.loads(args["model_config"])
         parameters = model_config.get("parameters", {})
-        model_dir = (
-            parameters.get("model_dir", {}).get("string_value", "").strip()
-            or "/models/BigVGAN/bigvgan_v2_24khz_100band_256x"
-        )
+
+        def _param(key, default=""):
+            return parameters.get(key, {}).get("string_value", "").strip() or default
+
+        model_dir = _param("model_dir", "/models/BigVGAN/bigvgan_v2_24khz_100band_256x")
+        bigvgan_module_dir = _param("bigvgan_module_dir", "/workspace/F5-TTS/src/third_party/BigVGAN")
 
         self.device = torch.device("cuda")
-        sys.path.append("/workspace/F5-TTS")
-        sys.path.append("/workspace/F5-TTS/third_party/BigVGAN")
+        if bigvgan_module_dir not in sys.path:
+            sys.path.append(bigvgan_module_dir)
 
         try:
-            from third_party.BigVGAN import bigvgan
-        except Exception:
-            try:
-                import bigvgan
-            except Exception as exc:
-                raise pb_utils.TritonModelException(
-                    f"Failed to import BigVGAN module: {exc}"
-                ) from exc
+            import bigvgan
+        except Exception as exc:
+            raise pb_utils.TritonModelException(
+                f"Failed to import BigVGAN module from bigvgan_module_dir={bigvgan_module_dir}: {exc}"
+            ) from exc
 
         try:
-            self.vocoder = bigvgan.BigVGAN.from_pretrained(
-                model_dir, use_cuda_kernel=False
-            )
+            self.vocoder = bigvgan.BigVGAN.from_pretrained(model_dir, use_cuda_kernel=False)
             self.vocoder.remove_weight_norm()
             self.vocoder = self.vocoder.eval().to(self.device)
         except Exception as exc:
