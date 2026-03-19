@@ -5,7 +5,7 @@ max_batch_size: 0
 parameters [
   {
     key: "model_dir"
-    value: { string_value: "/models/BigVGAN/bigvgan_v2_24khz_100band_256x" }
+    value: { string_value: "/models/bigvgan_v2_24khz_100band_256x" }
   },
   {
     key: "bigvgan_module_dir"

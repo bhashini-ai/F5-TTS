@@ -14,7 +14,7 @@ class TritonPythonModel:
         def _param(key, default=""):
             return parameters.get(key, {}).get("string_value", "").strip() or default
 
-        model_dir = _param("model_dir", "/models/BigVGAN/bigvgan_v2_24khz_100band_256x")
+        model_dir = _param("model_dir", "/models/bigvgan_v2_24khz_100band_256x")
         bigvgan_module_dir = _param("bigvgan_module_dir", "/workspace/F5-TTS/src/third_party/BigVGAN")
 
         self.device = torch.device("cuda")
