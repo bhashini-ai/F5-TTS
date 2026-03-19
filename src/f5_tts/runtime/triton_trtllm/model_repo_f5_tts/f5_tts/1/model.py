@@ -31,9 +31,13 @@ import torch
 import torchaudio
 import triton_python_backend_utils as pb_utils
 from f5_tts_trtllm import F5TTS
+from librosa.filters import mel as librosa_mel_fn
 from pypinyin import Style, lazy_pinyin
 from torch.nn.utils.rnn import pad_sequence
 from torch.utils.dlpack import from_dlpack, to_dlpack
+
+mel_basis_cache = {}
+hann_window_cache = {}
 
 
 def get_tokenizer(vocab_file_path: str):
@@ -134,35 +138,107 @@ class TritonPythonModel:
             vocab_size=self.vocab_size,
         )
 
-        self.vocoder = parameters["vocoder"]
-        assert self.vocoder in ["vocos", "bigvgan"]
-        if self.vocoder == "vocos":
-            self.mel_stft = torchaudio.transforms.MelSpectrogram(
-                sample_rate=self.target_audio_sample_rate,
-                n_fft=self.n_fft,
-                win_length=self.win_length,
-                hop_length=self.hop_length,
-                n_mels=self.n_mel_channels,
-                power=1,
-                center=True,
-                normalized=False,
-                norm=None,
-            ).to(self.device)
-            self.compute_mel_fn = self.get_vocos_mel_spectrogram
-        elif self.vocoder == "bigvgan":
-            self.compute_mel_fn = self.get_bigvgan_mel_spectrogram
+        self.default_vocoder = parameters["vocoder"].strip().lower()
+        if self.default_vocoder not in ("vocos", "bigvgan"):
+            raise pb_utils.TritonModelException(
+                f"Unsupported default vocoder in config: {self.default_vocoder}"
+            )
+
+        self.mel_stft = torchaudio.transforms.MelSpectrogram(
+            sample_rate=self.target_audio_sample_rate,
+            n_fft=self.n_fft,
+            win_length=self.win_length,
+            hop_length=self.hop_length,
+            n_mels=self.n_mel_channels,
+            power=1,
+            center=True,
+            normalized=False,
+            norm=None,
+        ).to(self.device)
 
     def get_vocos_mel_spectrogram(self, waveform):
         mel = self.mel_stft(waveform)
         mel = mel.clamp(min=1e-5).log()
         return mel.transpose(1, 2)
 
-    def forward_vocoder(self, mel):
+    def get_bigvgan_mel_spectrogram(
+        self,
+        waveform,
+        fmin=0,
+        fmax=None,
+        center=False,
+    ):
+        device = waveform.device
+        key = (
+            f"{self.n_fft}_{self.n_mel_channels}_{self.target_audio_sample_rate}_"
+            f"{self.hop_length}_{self.win_length}_{fmin}_{fmax}_{device}"
+        )
+
+        if key not in mel_basis_cache:
+            mel = librosa_mel_fn(
+                sr=self.target_audio_sample_rate,
+                n_fft=self.n_fft,
+                n_mels=self.n_mel_channels,
+                fmin=fmin,
+                fmax=fmax,
+            )
+            mel_basis_cache[key] = torch.from_numpy(mel).float().to(device)
+            hann_window_cache[key] = torch.hann_window(self.win_length).to(device)
+
+        mel_basis = mel_basis_cache[key]
+        hann_window = hann_window_cache[key]
+
+        padding = (self.n_fft - self.hop_length) // 2
+        waveform = torch.nn.functional.pad(
+            waveform.unsqueeze(1), (padding, padding), mode="reflect"
+        ).squeeze(1)
+
+        spec = torch.stft(
+            waveform,
+            self.n_fft,
+            hop_length=self.hop_length,
+            win_length=self.win_length,
+            window=hann_window,
+            center=center,
+            pad_mode="reflect",
+            normalized=False,
+            onesided=True,
+            return_complex=True,
+        )
+        spec = torch.sqrt(torch.view_as_real(spec).pow(2).sum(-1) + 1e-9)
+        mel_spec = torch.matmul(mel_basis, spec)
+        mel_spec = torch.log(torch.clamp(mel_spec, min=1e-5))
+        return mel_spec.transpose(1, 2)
+
+    def _decode_request_vocoder(self, request):
+        vocoder_tensor = pb_utils.get_input_tensor_by_name(request, "vocoder")
+        if vocoder_tensor is None:
+            return self.default_vocoder
+
+        value = vocoder_tensor.as_numpy().reshape(-1)[0]
+        if isinstance(value, bytes):
+            value = value.decode("utf-8", errors="ignore")
+        value = str(value).strip().lower()
+        if not value:
+            return self.default_vocoder
+        if value not in ("vocos", "bigvgan"):
+            raise pb_utils.TritonModelException(
+                f"Unsupported vocoder requested: {value}. Supported: vocos, bigvgan"
+            )
+        return value
+
+    def compute_mel_fn(self, waveform, vocoder_name):
+        if vocoder_name == "vocos":
+            return self.get_vocos_mel_spectrogram(waveform)
+        return self.get_bigvgan_mel_spectrogram(waveform)
+
+    def forward_vocoder(self, mel, vocoder_name):
+        vocoder_model_name = "vocoder" if vocoder_name == "vocos" else "vocoder_bigvgan"
         mel = mel.to(torch.float32).contiguous().cpu()
         input_tensor_0 = pb_utils.Tensor.from_dlpack("mel", to_dlpack(mel))
 
         inference_request = pb_utils.InferenceRequest(
-            model_name="vocoder", requested_output_names=["waveform"], inputs=[input_tensor_0]
+            model_name=vocoder_model_name, requested_output_names=["waveform"], inputs=[input_tensor_0],
         )
         inference_response = inference_request.exec()
         if inference_response.has_error():
@@ -175,14 +251,14 @@ class TritonPythonModel:
 
     def execute(self, requests):
         (
-            reference_text_list,
-            target_text_list,
             reference_target_texts_list,
             estimated_reference_target_mel_len,
             reference_mel_len,
             reference_rms_list,
-        ) = [], [], [], [], [], []
+        ) = ([], [], [], [])
         mel_features_list = []
+        request_vocoders = []
+
         if self.use_perf:
             torch.cuda.nvtx.range_push("preprocess")
         for request in requests:
@@ -191,10 +267,10 @@ class TritonPythonModel:
 
             reference_text = pb_utils.get_input_tensor_by_name(request, "reference_text").as_numpy()
             reference_text = reference_text[0][0].decode("utf-8")
-            reference_text_list.append(reference_text)
             target_text = pb_utils.get_input_tensor_by_name(request, "target_text").as_numpy()
             target_text = target_text[0][0].decode("utf-8")
-            target_text_list.append(target_text)
+            request_vocoder = self._decode_request_vocoder(request)
+            request_vocoders.append(request_vocoder)
 
             text = reference_text + target_text
             reference_target_texts_list.append(text)
@@ -214,7 +290,7 @@ class TritonPythonModel:
             wav = wav.to(self.device)
             if self.use_perf:
                 torch.cuda.nvtx.range_push("compute_mel")
-            mel_features = self.compute_mel_fn(wav)
+            mel_features = self.compute_mel_fn(wav, request_vocoder)
             if self.use_perf:
                 torch.cuda.nvtx.range_pop()
             mel_features_list.append(mel_features)
@@ -257,10 +333,11 @@ class TritonPythonModel:
             ref_mel_len = reference_mel_len[i]
             estimated_mel_len = estimated_reference_target_mel_len[i]
             denoised_one_item = denoised[i, ref_mel_len:estimated_mel_len, :].unsqueeze(0).transpose(1, 2)
-            audio = self.forward_vocoder(denoised_one_item)
+            audio = self.forward_vocoder(denoised_one_item, request_vocoders[i])
             if reference_rms_list[i] < self.target_rms:
                 audio = audio * reference_rms_list[i] / self.target_rms
 
+            audio = audio.reshape(-1).to(torch.float32).contiguous()
             audio = pb_utils.Tensor.from_dlpack("waveform", to_dlpack(audio))
             inference_response = pb_utils.InferenceResponse(output_tensors=[audio])
             responses.append(inference_response)

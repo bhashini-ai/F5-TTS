@@ -24,19 +24,19 @@ parameters [
     value: { string_value: "${vocab}"}
   },
   {
-   key: "model_path", 
+   key: "model_path",
    value: {string_value:"${model}"}
   },
   {
-   key: "tllm_model_dir", 
+   key: "tllm_model_dir",
    value: {string_value:"${trtllm}"}
   },
   {
-   key: "reference_audio_sample_rate", 
+   key: "reference_audio_sample_rate",
    value: {string_value:"24000"}
   },
   {
-   key: "vocoder", 
+   key: "vocoder",
    value: {string_value:"${vocoder}"}
   }
 ]
@@ -63,6 +63,12 @@ input [
     name: "target_text"
     data_type: TYPE_STRING
     dims: [1]
+  },
+  {
+    name: "vocoder"
+    data_type: TYPE_STRING
+    dims: [1]
+    optional: True
   }
 ]
 output [
