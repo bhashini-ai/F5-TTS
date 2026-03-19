@@ -1,5 +1,5 @@
 FROM nvcr.io/nvidia/tritonserver:24.12-trtllm-python-py3
-RUN pip install tritonclient[grpc] jieba pypinyin librosa
+RUN pip install tritonclient[grpc] rjieba pypinyin librosa
 RUN apt-get update && apt-get install -y --no-install-recommends \
         cmake build-essential sox libsox-dev libsox-fmt-all && \
     pip install --no-cache-dir --no-build-isolation git+https://github.com/pytorch/audio.git@release/2.6 && \
