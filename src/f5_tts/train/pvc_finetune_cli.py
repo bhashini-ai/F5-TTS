@@ -118,7 +118,9 @@ def main():
         if torch.backends.mps.is_available()
         else "cpu"
     )
-    model = load_checkpoint(model, ckpt_path, device=device, use_ema=args.use_ema)
+    # Training path expects fp32 model params unless explicit mixed-precision training is wired in.
+    # Do not inherit inference auto-fp16 loading here.
+    model = load_checkpoint(model, ckpt_path, device=device, dtype=torch.float32, use_ema=args.use_ema)
 
     freeze_model_parameters(model)
     peft_cfg = PVCAdapterConfig(
