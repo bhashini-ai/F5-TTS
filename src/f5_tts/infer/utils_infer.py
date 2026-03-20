@@ -185,6 +185,27 @@ def transcribe(ref_audio, language=None):
 # load model checkpoint for inference
 
 
+def _load_state_dict_allowing_extras(model, state_dict: dict, ckpt_path: str):
+    incompatible = model.load_state_dict(state_dict, strict=False)
+    missing = incompatible.missing_keys
+    unexpected = incompatible.unexpected_keys
+
+    # Hard fail if model-required parameters are absent.
+    if missing:
+        raise RuntimeError(
+            f"Checkpoint '{ckpt_path}' is missing required keys for model load: "
+            f"{missing[:20]}{' ...' if len(missing) > 20 else ''}"
+        )
+
+    # Allow extra keys (for example checkpoints that also pack vocoder weights).
+    if unexpected:
+        print(
+            f"[load_checkpoint] Ignoring {len(unexpected)} unexpected keys from '{ckpt_path}'. "
+            "Example keys: "
+            + ", ".join(unexpected[:5])
+        )
+
+
 def load_checkpoint(model, ckpt_path, device: str, dtype=None, use_ema=True):
     if dtype is None:
         dtype = (
@@ -218,11 +239,11 @@ def load_checkpoint(model, ckpt_path, device: str, dtype=None, use_ema=True):
             if key in checkpoint["model_state_dict"]:
                 del checkpoint["model_state_dict"][key]
 
-        model.load_state_dict(checkpoint["model_state_dict"])
+        _load_state_dict_allowing_extras(model, checkpoint["model_state_dict"], ckpt_path)
     else:
         if ckpt_type == "safetensors":
             checkpoint = {"model_state_dict": checkpoint}
-        model.load_state_dict(checkpoint["model_state_dict"])
+        _load_state_dict_allowing_extras(model, checkpoint["model_state_dict"], ckpt_path)
 
     del checkpoint
     torch.cuda.empty_cache()
