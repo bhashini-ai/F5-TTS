@@ -263,6 +263,7 @@ def load_model(
     ode_method=ode_method,
     use_ema=True,
     device=device,
+    model_dtype=None,
 ):
     if vocab_file == "":
         vocab_file = str(files("f5_tts").joinpath("infer/examples/vocab.txt"))
@@ -289,7 +290,9 @@ def load_model(
         vocab_char_map=vocab_char_map,
     ).to(device)
 
-    dtype = torch.float32 if mel_spec_type == "bigvgan" else None
+    dtype = model_dtype
+    if dtype is None and mel_spec_type == "bigvgan":
+        dtype = torch.float32
     model = load_checkpoint(model, ckpt_path, device, dtype=dtype, use_ema=use_ema)
 
     return model

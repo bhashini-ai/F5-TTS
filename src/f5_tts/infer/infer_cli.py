@@ -10,6 +10,7 @@ from pathlib import Path
 import numpy as np
 import soundfile as sf
 import tomli
+import torch
 from cached_path import cached_path
 from hydra.utils import get_class
 from omegaconf import OmegaConf
@@ -188,6 +189,12 @@ parser.add_argument(
     help="Specify the device to run on",
 )
 parser.add_argument(
+    "--model_dtype",
+    type=str,
+    choices=["auto", "float32", "float16", "bfloat16"],
+    help="Model parameter dtype at checkpoint load. Use float32 for unstable custom checkpoints.",
+)
+parser.add_argument(
     "--adapter_dir",
     type=str,
     help="Path to a PVC LoRA adapter directory containing adapter_model.safetensors and adapter_config.json",
@@ -240,6 +247,7 @@ sway_sampling_coef = args.sway_sampling_coef or config.get("sway_sampling_coef",
 speed = args.speed or config.get("speed", speed)
 fix_duration = args.fix_duration or config.get("fix_duration", fix_duration)
 device = args.device or config.get("device", device)
+model_dtype_name = args.model_dtype or config.get("model_dtype", "auto")
 adapter_dir = args.adapter_dir or config.get("adapter_dir", "")
 
 
@@ -318,8 +326,24 @@ if vocab_file.startswith("hf://"):
     vocab_file = str(cached_path(vocab_file))
 
 print(f"Using {model}...")
+dtype_map = {
+    "auto": None,
+    "float32": torch.float32,
+    "float16": torch.float16,
+    "bfloat16": torch.bfloat16,
+}
+model_dtype = dtype_map[model_dtype_name]
+if model_dtype is not None:
+    print(f"Using model dtype override: {model_dtype_name}")
+
 ema_model = load_model(
-    model_cls, model_arc, ckpt_file, mel_spec_type=vocoder_name, vocab_file=vocab_file, device=device
+    model_cls,
+    model_arc,
+    ckpt_file,
+    mel_spec_type=vocoder_name,
+    vocab_file=vocab_file,
+    device=device,
+    model_dtype=model_dtype,
 )
 
 if adapter_dir:

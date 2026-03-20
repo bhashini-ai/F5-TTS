@@ -31,6 +31,12 @@ def parse_args():
         choices=["F5TTS_v1_Base", "F5TTS_Base", "E2TTS_Base"],
     )
     parser.add_argument("--dataset_path", type=str, required=True, help="Prepared dataset folder with raw.arrow + vocab.txt")
+    parser.add_argument(
+        "--vocab_file",
+        type=str,
+        default="",
+        help="Optional vocab.txt override. Use the base-model vocab file for language-specific checkpoints.",
+    )
     parser.add_argument("--speaker_id", type=str, required=True)
     parser.add_argument("--base_ckpt", type=str, default="", help="Local or hf:// checkpoint path")
     parser.add_argument("--use_ema", action=argparse.BooleanOptionalAction, default=True)
@@ -94,6 +100,7 @@ def file_sha256(path: str):
 def build_adapter_metadata(
     args,
     ckpt_path: str,
+    vocab_file: str,
     dataset_path: Path,
     peft_cfg: PVCAdapterConfig,
     injected,
@@ -108,6 +115,8 @@ def build_adapter_metadata(
         "exp_name": args.exp_name,
         "base_ckpt": ckpt_path,
         "base_ckpt_sha256": file_sha256(ckpt_path),
+        "vocab_file": str(vocab_file),
+        "vocab_sha256": file_sha256(str(vocab_file)),
         "use_ema": args.use_ema,
         "dataset_path": str(dataset_path),
         "peft": peft_cfg.to_dict(),
@@ -154,9 +163,20 @@ def save_adapter_from_ema_checkpoint(checkpoint_file: str, output_dir: Path, ada
 def main():
     args = parse_args()
     dataset_path = Path(args.dataset_path).expanduser().resolve()
-    vocab_file = dataset_path / "vocab.txt"
-    if not vocab_file.exists():
-        raise FileNotFoundError(f"Missing vocab file in dataset_path: {vocab_file}")
+    dataset_vocab_file = dataset_path / "vocab.txt"
+    if not dataset_vocab_file.exists():
+        raise FileNotFoundError(f"Missing vocab file in dataset_path: {dataset_vocab_file}")
+
+    if args.vocab_file:
+        vocab_file = Path(args.vocab_file).expanduser().resolve()
+        if not vocab_file.exists():
+            raise FileNotFoundError(f"Missing provided --vocab_file: {vocab_file}")
+    else:
+        vocab_file = dataset_vocab_file
+
+    print(f"Using tokenizer vocab: {vocab_file}")
+    if dataset_vocab_file != vocab_file:
+        print(f"Dataset vocab at {dataset_vocab_file} is not used (override via --vocab_file).")
 
     model_cfg = OmegaConf.load(str(files("f5_tts").joinpath(f"configs/{args.exp_name}.yaml")))
     model_cls = get_class(f"f5_tts.model.{model_cfg.model.backbone}")
@@ -211,6 +231,7 @@ def main():
         adapter_cfg = build_adapter_metadata(
             args=args,
             ckpt_path=ckpt_path,
+            vocab_file=str(vocab_file),
             dataset_path=dataset_path,
             peft_cfg=peft_cfg,
             injected=injected,
@@ -265,6 +286,7 @@ def main():
         adapter_cfg = build_adapter_metadata(
             args=args,
             ckpt_path=ckpt_path,
+            vocab_file=str(vocab_file),
             dataset_path=dataset_path,
             peft_cfg=peft_cfg,
             injected=injected,
