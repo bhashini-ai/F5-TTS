@@ -6,6 +6,7 @@ ref_text = ""
 gen_text = ""
 # File with text to generate. Ignores the text above.
 gen_file = "infer/examples/multi/story.txt"
+adapter_dir = ""
 remove_silence = true
 output_dir = "tests"
 output_file = "infer_cli_story.wav"

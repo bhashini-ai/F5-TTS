@@ -64,6 +64,29 @@ If use tensorboard as logger, install it first with `pip install tensorboard`.
 
 <ins>The `use_ema = True` might be harmful for early-stage finetuned checkpoints</ins> (which goes just few updates, thus ema weights still dominated by pretrained ones), try turn it off with finetune gradio option or `load_model(..., use_ema=False)`, see if offer better results.
 
+### 2.1 PVC LoRA + Prompt Adapter fine-tuning
+
+For per-speaker PVC-style PEFT training (LoRA + prompt adapter), run:
+
+```bash
+f5-tts_pvc-finetune-cli \
+  --exp_name F5TTS_v1_Base \
+  --dataset_path /abs/path/to/prepared_dataset \
+  --speaker_id speaker_001 \
+  --lora_rank 16 \
+  --lora_alpha 16 \
+  --lora_dropout 0.05 \
+  --prompt_drop_path 0.3 \
+  --output_root lora
+```
+
+It exports:
+
+```text
+lora/<speaker_id>/adapter_model.safetensors
+lora/<speaker_id>/adapter_config.json
+```
+
 ### 3. W&B Logging
 
 The `wandb/` dir will be created under path you run training/finetuning scripts.

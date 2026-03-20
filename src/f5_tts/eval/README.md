@@ -67,3 +67,34 @@ python src/f5_tts/eval/eval_utmos.py --audio_dir <WAV_DIR> --ext wav
 
 > [!NOTE]  
 > Evaluation results can also be found in `_*_results.jsonl` files saved in `<GEN_WAV_DIR>`/`<WAV_DIR>`.
+
+## PVC Regression Gate (CI-Friendly)
+
+Use this when comparing base vs PVC outputs for the same prompts:
+
+```bash
+f5-tts_eval-pvc-gate \
+  --manifest <MANIFEST_JSONL> \
+  --lang en \
+  --sim_ckpt <WAVLM_ECAPA_CKPT> \
+  --asr_ckpt <ASR_CKPT_OR_DIR> \
+  --enable_utmos \
+  --min_sim_delta 0.02 \
+  --max_wer_delta 0.01 \
+  --min_utmos_delta 0.0 \
+  --output_dir tests/pvc_gate
+```
+
+Manifest JSONL fields required per line:
+
+- `ref_wav`
+- `base_wav`
+- `pvc_wav`
+- `target_text`
+
+Outputs:
+
+- `pvc_regression_report.json`
+- `pvc_regression_report.md`
+
+The command exits with code `1` when gate checks fail.

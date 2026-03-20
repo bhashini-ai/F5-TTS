@@ -74,6 +74,16 @@ f5-tts_infer-cli \
 --ref_text "The content, subtitle or transcription of reference audio." \
 --gen_text "Some text you want TTS model generate for you."
 
+# Use a trained PVC LoRA adapter
+f5-tts_infer-cli \
+--model F5TTS_v1_Base \
+--adapter_dir "lora/speaker_001" \
+--ref_audio "ref_audio.wav" \
+--ref_text "The content, subtitle or transcription of reference audio." \
+--gen_text "Some text you want TTS model generate for you."
+
+# Adapter compatibility (model name / base checkpoint hash) is validated before loading.
+
 # Use BigVGAN as vocoder. Currently only support F5TTS_Base. 
 f5-tts_infer-cli --model F5TTS_Base --vocoder_name bigvgan --load_vocoder_from_local
 
@@ -136,6 +146,10 @@ from importlib.resources import files
 from f5_tts.api import F5TTS
 
 f5tts = F5TTS()
+
+# Optional: load a PVC adapter once and reuse across requests
+f5tts.load_adapter("lora/speaker_001")
+
 wav, sr, spec = f5tts.infer(
     ref_file=str(files("f5_tts").joinpath("infer/examples/basic/basic_ref_en.wav")),
     ref_text="some call me nature, others call me mother nature.",
@@ -144,6 +158,9 @@ wav, sr, spec = f5tts.infer(
     file_spec=str(files("f5_tts").joinpath("../../tests/api_out.png")),
     seed=None,
 )
+
+# Or switch adapter per-call
+# f5tts.infer(..., speaker_adapter="lora/speaker_002")
 ```
 Check [api.py](../api.py) for more details.
 
@@ -174,4 +191,3 @@ To test speech editing capabilities, use the following command:
 ```bash
 python src/f5_tts/infer/speech_edit.py
 ```
-

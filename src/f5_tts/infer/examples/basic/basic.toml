@@ -6,6 +6,7 @@ ref_text = "Some call me nature, others call me mother nature."
 gen_text = "I don't really care what you call me. I've been a silent spectator, watching species evolve, empires rise and fall. But always remember, I am mighty and enduring."
 # File with text to generate. Ignores the text above.
 gen_file = ""
+adapter_dir = ""
 remove_silence = false
 output_dir = "tests"
 output_file = "infer_cli_basic.wav"

@@ -1,0 +1,162 @@
+name: "${name}"
+backend: "python"
+max_batch_size: 8
+dynamic_batching {
+  max_queue_delay_microseconds: 1000
+}
+
+parameters [
+  {
+    key: "model_name"
+    value: { string_value: "F5TTS_v1_Base" }
+  },
+  {
+    key: "ckpt_file"
+    value: { string_value: "" }
+  },
+  {
+    key: "vocab_file"
+    value: { string_value: "" }
+  },
+  {
+    key: "reference_audio_sample_rate"
+    value: { string_value: "24000" }
+  },
+  {
+    key: "vocoder_name"
+    value: { string_value: "vocos" }
+  },
+  {
+    key: "load_vocoder_from_local"
+    value: { string_value: "false" }
+  },
+  {
+    key: "vocoder_local_path"
+    value: { string_value: "" }
+  },
+  {
+    key: "lora_root"
+    value: { string_value: "/models/lora" }
+  },
+  {
+    key: "adapter_registry"
+    value: { string_value: "" }
+  },
+  {
+    key: "adapter_cache_size_gpu"
+    value: { string_value: "8" }
+  },
+  {
+    key: "adapter_cache_size_cpu"
+    value: { string_value: "64" }
+  },
+  {
+    key: "strict_adapter"
+    value: { string_value: "true" }
+  },
+  {
+    key: "log_metrics_every_n_requests"
+    value: { string_value: "100" }
+  },
+  {
+    key: "lora_rank"
+    value: { string_value: "16" }
+  },
+  {
+    key: "lora_alpha"
+    value: { string_value: "16" }
+  },
+  {
+    key: "lora_dropout"
+    value: { string_value: "0.05" }
+  },
+  {
+    key: "prompt_drop_path"
+    value: { string_value: "0.3" }
+  },
+  {
+    key: "nfe_step"
+    value: { string_value: "32" }
+  },
+  {
+    key: "cfg_strength"
+    value: { string_value: "2.0" }
+  },
+  {
+    key: "sway_sampling_coef"
+    value: { string_value: "-1.0" }
+  },
+  {
+    key: "speed"
+    value: { string_value: "1.0" }
+  },
+  {
+    key: "cross_fade_duration"
+    value: { string_value: "0.15" }
+  },
+  {
+    key: "target_rms"
+    value: { string_value: "0.1" }
+  },
+  {
+    key: "fix_duration"
+    value: { string_value: "" }
+  }
+]
+
+input [
+  {
+    name: "reference_wav"
+    data_type: TYPE_FP32
+    dims: [-1]
+  },
+  {
+    name: "reference_wav_len"
+    data_type: TYPE_INT32
+    dims: [1]
+    optional: true
+  },
+  {
+    name: "reference_text"
+    data_type: TYPE_STRING
+    dims: [1]
+  },
+  {
+    name: "target_text"
+    data_type: TYPE_STRING
+    dims: [1]
+  },
+  {
+    name: "speaker_id"
+    data_type: TYPE_STRING
+    dims: [1]
+    optional: true
+  },
+  {
+    name: "adapter_id"
+    data_type: TYPE_STRING
+    dims: [1]
+    optional: true
+  },
+  {
+    name: "adapter_revision"
+    data_type: TYPE_STRING
+    dims: [1]
+    optional: true
+  }
+]
+
+output [
+  {
+    name: "waveform"
+    data_type: TYPE_FP32
+    dims: [-1]
+  }
+]
+
+instance_group [
+  {
+    count: 1
+    kind: KIND_GPU
+  }
+]

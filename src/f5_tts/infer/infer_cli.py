@@ -1,5 +1,6 @@
 import argparse
 import codecs
+import json
 import os
 import re
 from datetime import datetime
@@ -29,6 +30,13 @@ from f5_tts.infer.utils_infer import (
     speed,
     sway_sampling_coef,
     target_rms,
+)
+from f5_tts.peft import (
+    PVCAdapterConfig,
+    apply_pvc_adapters,
+    check_adapter_compatibility,
+    file_sha256,
+    load_adapter as load_pvc_adapter,
 )
 
 
@@ -174,6 +182,11 @@ parser.add_argument(
     type=str,
     help="Specify the device to run on",
 )
+parser.add_argument(
+    "--adapter_dir",
+    type=str,
+    help="Path to a PVC LoRA adapter directory containing adapter_model.safetensors and adapter_config.json",
+)
 args = parser.parse_args()
 
 
@@ -221,6 +234,7 @@ sway_sampling_coef = args.sway_sampling_coef or config.get("sway_sampling_coef",
 speed = args.speed or config.get("speed", speed)
 fix_duration = args.fix_duration or config.get("fix_duration", fix_duration)
 device = args.device or config.get("device", device)
+adapter_dir = args.adapter_dir or config.get("adapter_dir", "")
 
 
 # patches for pip pkg user
@@ -299,6 +313,39 @@ print(f"Using {model}...")
 ema_model = load_model(
     model_cls, model_arc, ckpt_file, mel_spec_type=vocoder_name, vocab_file=vocab_file, device=device
 )
+
+if adapter_dir:
+    adapter_dir = os.path.abspath(os.path.expanduser(adapter_dir))
+    adapter_cfg_file = os.path.join(adapter_dir, "adapter_config.json")
+    base_ckpt_sha = file_sha256(ckpt_file)
+    default_cfg = PVCAdapterConfig()
+    payload = {}
+    if os.path.exists(adapter_cfg_file):
+        with open(adapter_cfg_file, "r", encoding="utf-8") as f:
+            payload = json.load(f)
+        check_adapter_compatibility(
+            payload,
+            expected_model_name=model,
+            expected_base_ckpt_sha256=base_ckpt_sha,
+            strict=True,
+        )
+        peft_cfg = payload.get("peft", {})
+        adapter_cfg = PVCAdapterConfig(
+            rank=int(peft_cfg.get("rank", default_cfg.rank)),
+            alpha=float(peft_cfg.get("alpha", default_cfg.alpha)),
+            lora_dropout=float(peft_cfg.get("lora_dropout", default_cfg.lora_dropout)),
+            prompt_drop_path=float(peft_cfg.get("prompt_drop_path", default_cfg.prompt_drop_path)),
+            prompt_target=peft_cfg.get("prompt_target", default_cfg.prompt_target),
+            dit_target_regex=peft_cfg.get("dit_target_regex", default_cfg.dit_target_regex),
+        )
+    else:
+        adapter_cfg = default_cfg
+
+    apply_pvc_adapters(ema_model, adapter_cfg)
+    load_info = load_pvc_adapter(ema_model, adapter_dir, strict=True)
+    print(f"Loaded PVC adapter from: {adapter_dir}")
+    if load_info["missing_modules"] or load_info["unexpected_keys"]:
+        print(f"Adapter load warnings: {load_info}")
 
 
 # inference process

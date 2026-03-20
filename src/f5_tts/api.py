@@ -1,5 +1,7 @@
 import random
 import sys
+import json
+import os
 from importlib.resources import files
 
 import soundfile as sf
@@ -18,6 +20,14 @@ from f5_tts.infer.utils_infer import (
     transcribe,
 )
 from f5_tts.model.utils import seed_everything
+from f5_tts.peft import (
+    PVCAdapterConfig,
+    apply_pvc_adapters,
+    check_adapter_compatibility,
+    clear_adapter,
+    file_sha256,
+    load_adapter as load_pvc_adapter,
+)
 
 
 class F5TTS:
@@ -32,6 +42,7 @@ class F5TTS:
         device=None,
         hf_cache_dir=None,
     ):
+        self.model_name = model
         model_cfg = OmegaConf.load(str(files("f5_tts").joinpath(f"configs/{model}.yaml")))
         model_cls = get_class(f"f5_tts.model.{model_cfg.model.backbone}")
         model_arc = model_cfg.model.arch
@@ -79,9 +90,15 @@ class F5TTS:
             ckpt_file = str(
                 cached_path(f"hf://SWivid/{repo_name}/{model}/model_{ckpt_step}.{ckpt_type}", cache_dir=hf_cache_dir)
             )
+        self.base_ckpt_file = ckpt_file
+        self.base_ckpt_sha256 = file_sha256(ckpt_file)
         self.ema_model = load_model(
             model_cls, model_arc, ckpt_file, self.mel_spec_type, vocab_file, self.ode_method, self.use_ema, self.device
         )
+        self.adapter_injected = False
+        self.active_adapter_dir = None
+        self.active_adapter_metadata = {}
+        self.active_adapter_strict = True
 
     def transcribe(self, ref_audio, language=None):
         return transcribe(ref_audio, language)
@@ -95,11 +112,65 @@ class F5TTS:
     def export_spectrogram(self, spec, file_spec):
         save_spectrogram(spec, file_spec)
 
+    def _read_adapter_config(self, adapter_dir):
+        cfg_file = os.path.join(adapter_dir, "adapter_config.json")
+        if not os.path.exists(cfg_file):
+            return {}
+
+        with open(cfg_file, "r", encoding="utf-8") as f:
+            return json.load(f)
+
+    def _build_adapter_cfg_from_payload(self, payload):
+        default_cfg = PVCAdapterConfig()
+        peft_cfg = payload.get("peft", {})
+        return PVCAdapterConfig(
+            rank=int(peft_cfg.get("rank", 16)),
+            alpha=float(peft_cfg.get("alpha", 16.0)),
+            lora_dropout=float(peft_cfg.get("lora_dropout", 0.05)),
+            prompt_drop_path=float(peft_cfg.get("prompt_drop_path", 0.3)),
+            prompt_target=peft_cfg.get("prompt_target", default_cfg.prompt_target),
+            dit_target_regex=peft_cfg.get("dit_target_regex", default_cfg.dit_target_regex),
+        )
+
+    def _ensure_adapter_modules(self, adapter_cfg: PVCAdapterConfig):
+        if self.adapter_injected:
+            return
+        apply_pvc_adapters(self.ema_model, adapter_cfg)
+        self.adapter_injected = True
+
+    def load_adapter(self, adapter_dir, strict=True):
+        adapter_dir = os.path.abspath(adapter_dir)
+        payload = self._read_adapter_config(adapter_dir)
+        check_adapter_compatibility(
+            payload,
+            expected_model_name=self.model_name,
+            expected_base_ckpt_sha256=self.base_ckpt_sha256,
+            strict=strict,
+        )
+        adapter_cfg = self._build_adapter_cfg_from_payload(payload)
+        self._ensure_adapter_modules(adapter_cfg)
+        info = load_pvc_adapter(self.ema_model, adapter_dir, strict=strict)
+        self.active_adapter_dir = adapter_dir
+        self.active_adapter_metadata = info
+        self.active_adapter_strict = strict
+        return info
+
+    def unload_adapter(self):
+        if not self.adapter_injected:
+            self.active_adapter_dir = None
+            self.active_adapter_metadata = {}
+            return 0
+        cleared = clear_adapter(self.ema_model)
+        self.active_adapter_dir = None
+        self.active_adapter_metadata = {}
+        return cleared
+
     def infer(
         self,
         ref_file,
         ref_text,
         gen_text,
+        speaker_adapter=None,
         show_info=print,
         progress=tqdm,
         target_rms=0.1,
@@ -118,6 +189,11 @@ class F5TTS:
             seed = random.randint(0, sys.maxsize)
         seed_everything(seed)
         self.seed = seed
+
+        if speaker_adapter:
+            speaker_adapter = os.path.abspath(speaker_adapter)
+            if self.active_adapter_dir != speaker_adapter:
+                self.load_adapter(speaker_adapter, strict=self.active_adapter_strict)
 
         ref_file, ref_text = preprocess_ref_audio_text(ref_file, ref_text, show_info=show_info)
 
