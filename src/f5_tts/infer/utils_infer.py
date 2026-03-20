@@ -518,6 +518,9 @@ def infer_batch_process(
             )
             del _
 
+            if not torch.isfinite(generated).all():
+                raise RuntimeError("Model produced non-finite mel values (NaN/Inf).")
+
             generated = generated.to(torch.float32)  # generated mel spectrogram
             generated = generated[:, ref_audio_len:, :]
             generated = generated.permute(0, 2, 1)
@@ -525,11 +528,26 @@ def infer_batch_process(
                 generated_wave = vocoder.decode(generated)
             elif mel_spec_type == "bigvgan":
                 generated_wave = vocoder(generated)
+
+            if not torch.isfinite(generated_wave).all():
+                raise RuntimeError("Vocoder produced non-finite waveform values (NaN/Inf).")
+
             if rms < target_rms:
                 generated_wave = generated_wave * rms / target_rms
 
             # wav -> numpy
             generated_wave = generated_wave.squeeze().cpu().numpy()
+
+            if generated_wave.size == 0:
+                raise RuntimeError("Generated waveform is empty.")
+            wave_std = float(np.std(generated_wave))
+            wave_peak = float(np.max(np.abs(generated_wave)))
+            if wave_std < 1e-7 or wave_peak < 1e-5:
+                raise RuntimeError(
+                    "Generated waveform collapsed to near-constant/near-zero output "
+                    f"(std={wave_std:.3e}, peak={wave_peak:.3e}). "
+                    "Try an earlier adapter checkpoint or lower training updates."
+                )
 
             if streaming:
                 for j in range(0, len(generated_wave), chunk_size):

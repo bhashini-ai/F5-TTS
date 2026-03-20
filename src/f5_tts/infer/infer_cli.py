@@ -137,6 +137,11 @@ parser.add_argument(
     help="To load vocoder from local dir, default to ../checkpoints/vocos-mel-24khz",
 )
 parser.add_argument(
+    "--vocoder_local_path",
+    type=str,
+    help="Local vocoder directory. If set, this path is used when --load_vocoder_from_local is enabled.",
+)
+parser.add_argument(
     "--vocoder_name",
     type=str,
     choices=["vocos", "bigvgan"],
@@ -224,6 +229,7 @@ if save_chunk and use_legacy_text:
 
 remove_silence = args.remove_silence or config.get("remove_silence", False)
 load_vocoder_from_local = args.load_vocoder_from_local or config.get("load_vocoder_from_local", False)
+vocoder_local_path_cfg = args.vocoder_local_path or config.get("vocoder_local_path", "")
 
 vocoder_name = args.vocoder_name or config.get("vocoder_name", mel_spec_type)
 target_rms = args.target_rms or config.get("target_rms", target_rms)
@@ -268,9 +274,11 @@ if save_chunk:
 # load vocoder
 
 if vocoder_name == "vocos":
-    vocoder_local_path = "../checkpoints/vocos-mel-24khz"
+    default_vocoder_local_path = "../checkpoints/vocos-mel-24khz"
 elif vocoder_name == "bigvgan":
-    vocoder_local_path = "../checkpoints/bigvgan_v2_24khz_100band_256x"
+    default_vocoder_local_path = "../checkpoints/bigvgan_v2_24khz_100band_256x"
+
+vocoder_local_path = vocoder_local_path_cfg or default_vocoder_local_path
 
 vocoder = load_vocoder(
     vocoder_name=vocoder_name, is_local=load_vocoder_from_local, local_path=vocoder_local_path, device=device

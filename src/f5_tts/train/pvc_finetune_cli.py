@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import json
 import os
 from importlib.resources import files
 from pathlib import Path
@@ -10,6 +11,7 @@ import torch
 from cached_path import cached_path
 from hydra.utils import get_class
 from omegaconf import OmegaConf
+from safetensors.torch import save_file
 
 from f5_tts.infer.utils_infer import load_checkpoint
 from f5_tts.model import CFM, Trainer
@@ -121,6 +123,34 @@ def build_adapter_metadata(
     return payload
 
 
+def save_adapter_from_ema_checkpoint(checkpoint_file: str, output_dir: Path, adapter_config: dict):
+    if not checkpoint_file or not os.path.isfile(checkpoint_file):
+        return False
+
+    checkpoint = torch.load(checkpoint_file, map_location="cpu", weights_only=True)
+    ema_state = checkpoint.get("ema_model_state_dict", {})
+    if not ema_state:
+        return False
+
+    adapter_state = {}
+    prefix = "ema_model."
+    for key, value in ema_state.items():
+        if not key.startswith(prefix):
+            continue
+        stripped = key[len(prefix) :]
+        if stripped.endswith(".lora_A") or stripped.endswith(".lora_B"):
+            adapter_state[stripped] = value.detach().cpu().contiguous()
+
+    if not adapter_state:
+        return False
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    save_file(adapter_state, str(output_dir / "adapter_model.safetensors"))
+    with open(output_dir / "adapter_config.json", "w", encoding="utf-8") as f:
+        json.dump({"format_version": 1, **adapter_config}, f, indent=2, ensure_ascii=False)
+    return True
+
+
 def main():
     args = parse_args()
     dataset_path = Path(args.dataset_path).expanduser().resolve()
@@ -191,8 +221,12 @@ def main():
             checkpoint_file=checkpoint_file,
         )
         adapter_dir = periodic_adapter_root / f"update_{update}"
-        save_adapter(model_unwrapped_local, str(adapter_dir), adapter_cfg)
-        print(f"Saved periodic LoRA adapter at update {update}: {adapter_dir}")
+        exported = save_adapter_from_ema_checkpoint(checkpoint_file, adapter_dir, adapter_cfg)
+        if not exported:
+            save_adapter(model_unwrapped_local, str(adapter_dir), adapter_cfg)
+            print(f"Saved periodic LoRA adapter (online model) at update {update}: {adapter_dir}")
+        else:
+            print(f"Saved periodic LoRA adapter (EMA) at update {update}: {adapter_dir}")
         periodic_exported_updates.add(update)
 
     trainer = Trainer(
