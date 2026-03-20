@@ -89,6 +89,38 @@ def file_sha256(path: str):
     return h.hexdigest()
 
 
+def build_adapter_metadata(
+    args,
+    ckpt_path: str,
+    dataset_path: Path,
+    peft_cfg: PVCAdapterConfig,
+    injected,
+    total_params: int,
+    trainable_params: int,
+    mel_spec_kwargs,
+    checkpoint_update: int | None = None,
+    checkpoint_file: str = "",
+):
+    payload = {
+        "speaker_id": args.speaker_id,
+        "exp_name": args.exp_name,
+        "base_ckpt": ckpt_path,
+        "base_ckpt_sha256": file_sha256(ckpt_path),
+        "use_ema": args.use_ema,
+        "dataset_path": str(dataset_path),
+        "peft": peft_cfg.to_dict(),
+        "injected_modules": injected,
+        "trainable_params": trainable_params,
+        "total_params": total_params,
+        "sample_rate": int(mel_spec_kwargs.target_sample_rate),
+    }
+    if checkpoint_update is not None:
+        payload["checkpoint_update"] = int(checkpoint_update)
+    if checkpoint_file:
+        payload["checkpoint_file"] = checkpoint_file
+    return payload
+
+
 def main():
     args = parse_args()
     dataset_path = Path(args.dataset_path).expanduser().resolve()
@@ -136,6 +168,33 @@ def main():
 
     logger = None if args.logger == "none" else args.logger
     checkpoint_dir = args.checkpoint_dir or str(files("f5_tts").joinpath(f"../../ckpts/pvc_{args.speaker_id}"))
+    periodic_adapter_root = Path(checkpoint_dir).expanduser().resolve() / "lora_adapters"
+    periodic_exported_updates = set()
+
+    def on_checkpoint_saved(trainer_obj, update, last, checkpoint_file):
+        # Export adapters on periodic "last" saves (default every 1000 updates).
+        if not last:
+            return
+        if update in periodic_exported_updates:
+            return
+        model_unwrapped_local = trainer_obj.accelerator.unwrap_model(trainer_obj.model)
+        adapter_cfg = build_adapter_metadata(
+            args=args,
+            ckpt_path=ckpt_path,
+            dataset_path=dataset_path,
+            peft_cfg=peft_cfg,
+            injected=injected,
+            total_params=total_params,
+            trainable_params=trainable_params,
+            mel_spec_kwargs=mel_spec_kwargs,
+            checkpoint_update=update,
+            checkpoint_file=checkpoint_file,
+        )
+        adapter_dir = periodic_adapter_root / f"update_{update}"
+        save_adapter(model_unwrapped_local, str(adapter_dir), adapter_cfg)
+        print(f"Saved periodic LoRA adapter at update {update}: {adapter_dir}")
+        periodic_exported_updates.add(update)
+
     trainer = Trainer(
         model=model,
         epochs=args.epochs,
@@ -154,6 +213,7 @@ def main():
         wandb_run_name=f"{args.speaker_id}_pvc_lora",
         last_per_updates=args.last_per_updates,
         mel_spec_type=mel_spec_kwargs.mel_spec_type,
+        checkpoint_callback=on_checkpoint_saved,
     )
 
     train_dataset = load_dataset(
@@ -168,19 +228,16 @@ def main():
     if trainer.is_main:
         output_dir = Path(args.output_root).expanduser().resolve() / args.speaker_id
         model_unwrapped = trainer.accelerator.unwrap_model(trainer.model)
-        adapter_cfg = {
-            "speaker_id": args.speaker_id,
-            "exp_name": args.exp_name,
-            "base_ckpt": ckpt_path,
-            "base_ckpt_sha256": file_sha256(ckpt_path),
-            "use_ema": args.use_ema,
-            "dataset_path": str(dataset_path),
-            "peft": peft_cfg.to_dict(),
-            "injected_modules": injected,
-            "trainable_params": trainable_params,
-            "total_params": total_params,
-            "sample_rate": int(mel_spec_kwargs.target_sample_rate),
-        }
+        adapter_cfg = build_adapter_metadata(
+            args=args,
+            ckpt_path=ckpt_path,
+            dataset_path=dataset_path,
+            peft_cfg=peft_cfg,
+            injected=injected,
+            total_params=total_params,
+            trainable_params=trainable_params,
+            mel_spec_kwargs=mel_spec_kwargs,
+        )
         save_adapter(model_unwrapped, str(output_dir), adapter_cfg)
         print(f"Saved adapter artifact at: {output_dir}")
 

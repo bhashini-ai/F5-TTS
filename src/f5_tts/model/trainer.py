@@ -53,6 +53,7 @@ class Trainer:
         is_local_vocoder: bool = False,  # use local path vocoder
         local_vocoder_path: str = "",  # local vocoder path
         model_cfg_dict: dict = dict(),  # training config
+        checkpoint_callback=None,  # callable(trainer, update, last, checkpoint_file)
     ):
         ddp_kwargs = DistributedDataParallelKwargs(find_unused_parameters=True)
 
@@ -134,6 +135,7 @@ class Trainer:
         self.noise_scheduler = noise_scheduler
 
         self.duration_predictor = duration_predictor
+        self.checkpoint_callback = checkpoint_callback
 
         trainable_params = [p for p in model.parameters() if p.requires_grad]
         if not trainable_params:
@@ -164,13 +166,16 @@ class Trainer:
             )
             if not os.path.exists(self.checkpoint_path):
                 os.makedirs(self.checkpoint_path)
+            checkpoint_file = ""
             if last:
-                self.accelerator.save(checkpoint, f"{self.checkpoint_path}/model_last.pt")
+                checkpoint_file = f"{self.checkpoint_path}/model_last.pt"
+                self.accelerator.save(checkpoint, checkpoint_file)
                 print(f"Saved last checkpoint at update {update}")
             else:
                 if self.keep_last_n_checkpoints == 0:
                     return
-                self.accelerator.save(checkpoint, f"{self.checkpoint_path}/model_{update}.pt")
+                checkpoint_file = f"{self.checkpoint_path}/model_{update}.pt"
+                self.accelerator.save(checkpoint, checkpoint_file)
                 if self.keep_last_n_checkpoints > 0:
                     # Updated logic to exclude pretrained model from rotation
                     checkpoints = [
@@ -186,6 +191,9 @@ class Trainer:
                         oldest_checkpoint = checkpoints.pop(0)
                         os.remove(os.path.join(self.checkpoint_path, oldest_checkpoint))
                         print(f"Removed old checkpoint: {oldest_checkpoint}")
+
+            if self.checkpoint_callback is not None:
+                self.checkpoint_callback(self, update, last, checkpoint_file)
 
     def load_checkpoint(self):
         if (
@@ -346,6 +354,8 @@ class Trainer:
 
         for epoch in range(skipped_epoch, self.epochs):
             self.model.train()
+            epoch_loss_sum = 0.0
+            epoch_loss_updates = 0
             if exists(resumable_with_seed) and epoch == skipped_epoch:
                 progress_bar_initial = math.ceil(skipped_batch / self.grad_accumulation_steps)
                 current_dataloader = skipped_dataloader
@@ -393,6 +403,8 @@ class Trainer:
                         self.ema_model.update()
 
                     global_update += 1
+                    epoch_loss_sum += loss.item()
+                    epoch_loss_updates += 1
                     progress_bar.update(1)
                     progress_bar.set_postfix(update=str(global_update), loss=loss.item())
 
@@ -403,6 +415,17 @@ class Trainer:
                 if self.logger == "tensorboard" and self.accelerator.is_main_process:
                     self.writer.add_scalar("loss", loss.item(), global_update)
                     self.writer.add_scalar("lr", self.scheduler.get_last_lr()[0], global_update)
+
+                if global_update % self.last_per_updates == 0 and self.accelerator.sync_gradients:
+                    epoch_avg_loss = epoch_loss_sum / max(1, epoch_loss_updates)
+                    if self.accelerator.is_local_main_process:
+                        print(
+                            f"[Metrics] update={global_update}, epoch={epoch + 1}, "
+                            f"epoch_avg_loss={epoch_avg_loss:.6f} (from {epoch_loss_updates} updates)"
+                        )
+                    self.accelerator.log({"epoch_avg_loss": epoch_avg_loss}, step=global_update)
+                    if self.logger == "tensorboard" and self.accelerator.is_main_process:
+                        self.writer.add_scalar("epoch_avg_loss", epoch_avg_loss, global_update)
 
                 if global_update % self.last_per_updates == 0 and self.accelerator.sync_gradients:
                     self.save_checkpoint(global_update, last=True)
