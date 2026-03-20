@@ -35,8 +35,10 @@ class LoRALinear(nn.Module):
         self.lora_dropout = nn.Dropout(lora_dropout) if lora_dropout > 0 else nn.Identity()
         self.branch_drop = DropPath(branch_drop) if branch_drop > 0 else nn.Identity()
 
-        self.lora_A = nn.Parameter(torch.empty(rank, base_layer.in_features))
-        self.lora_B = nn.Parameter(torch.zeros(base_layer.out_features, rank))
+        param_device = base_layer.weight.device
+        param_dtype = base_layer.weight.dtype
+        self.lora_A = nn.Parameter(torch.empty(rank, base_layer.in_features, device=param_device, dtype=param_dtype))
+        self.lora_B = nn.Parameter(torch.zeros(base_layer.out_features, rank, device=param_device, dtype=param_dtype))
         self.reset_parameters()
 
     def reset_parameters(self):
