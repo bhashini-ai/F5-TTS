@@ -277,6 +277,14 @@ class TritonPythonModel:
             alpha=float(self.parameters.get("lora_alpha", "16")),
             lora_dropout=float(self.parameters.get("lora_dropout", "0.05")),
             prompt_drop_path=float(self.parameters.get("prompt_drop_path", "0.3")),
+            conditioning_enabled=_decode_bool(self.parameters.get("conditioning_enabled", "true"), default=True),
+            conditioning_gamma=float(self.parameters.get("conditioning_gamma", "0.25")),
+            conditioning_kernel_size=int(self.parameters.get("conditioning_kernel_size", "3")),
+            conditioning_se_reduction=int(self.parameters.get("conditioning_se_reduction", "4")),
+            conditioning_target_regex=self.parameters.get(
+                "conditioning_target_regex",
+                PVCAdapterConfig().conditioning_target_regex,
+            ),
         )
         apply_pvc_adapters(self.model, adapter_cfg)
 

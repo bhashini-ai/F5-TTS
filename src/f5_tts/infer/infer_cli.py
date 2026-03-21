@@ -376,6 +376,15 @@ if adapter_dir:
             prompt_drop_path=float(peft_cfg.get("prompt_drop_path", default_cfg.prompt_drop_path)),
             prompt_target=peft_cfg.get("prompt_target", default_cfg.prompt_target),
             dit_target_regex=peft_cfg.get("dit_target_regex", default_cfg.dit_target_regex),
+            conditioning_enabled=bool(peft_cfg.get("conditioning_enabled", default_cfg.conditioning_enabled)),
+            conditioning_gamma=float(peft_cfg.get("conditioning_gamma", default_cfg.conditioning_gamma)),
+            conditioning_kernel_size=int(
+                peft_cfg.get("conditioning_kernel_size", default_cfg.conditioning_kernel_size)
+            ),
+            conditioning_se_reduction=int(
+                peft_cfg.get("conditioning_se_reduction", default_cfg.conditioning_se_reduction)
+            ),
+            conditioning_target_regex=peft_cfg.get("conditioning_target_regex", default_cfg.conditioning_target_regex),
         )
     else:
         adapter_cfg = default_cfg

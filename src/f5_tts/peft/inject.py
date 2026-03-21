@@ -5,6 +5,7 @@ from dataclasses import asdict, dataclass
 
 from torch import nn
 
+from f5_tts.peft.conditioning import ConditioningConvAdapter
 from f5_tts.peft.lora import LoRALinear
 
 
@@ -16,6 +17,11 @@ class PVCAdapterConfig:
     prompt_drop_path: float = 0.3
     prompt_target: str = "transformer.input_embed.proj"
     dit_target_regex: str = r"^transformer\.transformer_blocks\.\d+\.attn\.to_(q|v)$"
+    conditioning_enabled: bool = False
+    conditioning_gamma: float = 0.25
+    conditioning_kernel_size: int = 3
+    conditioning_se_reduction: int = 4
+    conditioning_target_regex: str = r"^transformer\.text_embed\.text_blocks\.\d+\.dwconv$"
 
     def to_dict(self):
         return asdict(self)
@@ -60,9 +66,34 @@ def _replace_linear_with_lora(
     return True
 
 
+def _replace_conv1d_with_conditioning_adapter(
+    model: nn.Module,
+    module_name: str,
+    gamma: float,
+    kernel_size: int,
+    se_reduction: int,
+):
+    parent, child_name = _resolve_parent_and_child(model, module_name)
+    layer = getattr(parent, child_name)
+    if isinstance(layer, ConditioningConvAdapter):
+        return True
+    if not isinstance(layer, nn.Conv1d):
+        raise TypeError(f"Target module is not nn.Conv1d: {module_name} ({type(layer)})")
+
+    wrapped = ConditioningConvAdapter(
+        layer,
+        gamma=gamma,
+        kernel_size=kernel_size,
+        se_reduction=se_reduction,
+    )
+    setattr(parent, child_name, wrapped)
+    return True
+
+
 def apply_pvc_adapters(model: nn.Module, cfg: PVCAdapterConfig):
     prompt_modules = []
     dit_modules = []
+    conditioning_modules = []
 
     module_names = [name for name, _ in model.named_modules()]
     for name in module_names:
@@ -88,16 +119,29 @@ def apply_pvc_adapters(model: nn.Module, cfg: PVCAdapterConfig):
             )
             if replaced:
                 dit_modules.append(name)
+        elif cfg.conditioning_enabled and re.match(cfg.conditioning_target_regex, name):
+            replaced = _replace_conv1d_with_conditioning_adapter(
+                model,
+                name,
+                gamma=cfg.conditioning_gamma,
+                kernel_size=cfg.conditioning_kernel_size,
+                se_reduction=cfg.conditioning_se_reduction,
+            )
+            if replaced:
+                conditioning_modules.append(name)
 
     if not prompt_modules:
         raise RuntimeError(f"Prompt target not found or not replaced: {cfg.prompt_target}")
     if not dit_modules:
         raise RuntimeError(f"No DiT target modules replaced with regex: {cfg.dit_target_regex}")
+    if cfg.conditioning_enabled and not conditioning_modules:
+        raise RuntimeError(f"No conditioning modules replaced with regex: {cfg.conditioning_target_regex}")
 
     return {
         "prompt_modules": prompt_modules,
         "dit_modules": dit_modules,
-        "all_modules": prompt_modules + dit_modules,
+        "conditioning_modules": conditioning_modules,
+        "all_modules": prompt_modules + dit_modules + conditioning_modules,
     }
 
 
@@ -111,7 +155,7 @@ def set_lora_strength(model: nn.Module, strength: float):
     strength = float(strength)
     updated = 0
     for _, module in model.named_modules():
-        if isinstance(module, LoRALinear):
+        if isinstance(module, (LoRALinear, ConditioningConvAdapter)):
             module.runtime_scale = strength
             updated += 1
     return updated

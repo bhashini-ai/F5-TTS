@@ -126,12 +126,21 @@ class F5TTS:
         default_cfg = PVCAdapterConfig()
         peft_cfg = payload.get("peft", {})
         return PVCAdapterConfig(
-            rank=int(peft_cfg.get("rank", 16)),
-            alpha=float(peft_cfg.get("alpha", 16.0)),
-            lora_dropout=float(peft_cfg.get("lora_dropout", 0.05)),
-            prompt_drop_path=float(peft_cfg.get("prompt_drop_path", 0.3)),
+            rank=int(peft_cfg.get("rank", default_cfg.rank)),
+            alpha=float(peft_cfg.get("alpha", default_cfg.alpha)),
+            lora_dropout=float(peft_cfg.get("lora_dropout", default_cfg.lora_dropout)),
+            prompt_drop_path=float(peft_cfg.get("prompt_drop_path", default_cfg.prompt_drop_path)),
             prompt_target=peft_cfg.get("prompt_target", default_cfg.prompt_target),
             dit_target_regex=peft_cfg.get("dit_target_regex", default_cfg.dit_target_regex),
+            conditioning_enabled=bool(peft_cfg.get("conditioning_enabled", default_cfg.conditioning_enabled)),
+            conditioning_gamma=float(peft_cfg.get("conditioning_gamma", default_cfg.conditioning_gamma)),
+            conditioning_kernel_size=int(
+                peft_cfg.get("conditioning_kernel_size", default_cfg.conditioning_kernel_size)
+            ),
+            conditioning_se_reduction=int(
+                peft_cfg.get("conditioning_se_reduction", default_cfg.conditioning_se_reduction)
+            ),
+            conditioning_target_regex=peft_cfg.get("conditioning_target_regex", default_cfg.conditioning_target_regex),
         )
 
     def _ensure_adapter_modules(self, adapter_cfg: PVCAdapterConfig):

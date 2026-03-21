@@ -64,9 +64,9 @@ If use tensorboard as logger, install it first with `pip install tensorboard`.
 
 <ins>The `use_ema = True` might be harmful for early-stage finetuned checkpoints</ins> (which goes just few updates, thus ema weights still dominated by pretrained ones), try turn it off with finetune gradio option or `load_model(..., use_ema=False)`, see if offer better results.
 
-### 2.1 PVC LoRA + Prompt Adapter fine-tuning
+### 2.1 PVC DiT LoRA + Prompt Adapter + Conditioning Adapter fine-tuning
 
-For per-speaker PVC-style PEFT training (LoRA + prompt adapter), run:
+For per-speaker PVC-style PEFT training, run:
 
 ```bash
 f5-tts_pvc-finetune-cli \
@@ -77,6 +77,10 @@ f5-tts_pvc-finetune-cli \
   --lora_alpha 16 \
   --lora_dropout 0.05 \
   --prompt_drop_path 0.3 \
+  --conditioning_adapter \
+  --conditioning_gamma 0.25 \
+  --conditioning_kernel_size 3 \
+  --conditioning_se_reduction 4 \
   --output_root lora
 ```
 

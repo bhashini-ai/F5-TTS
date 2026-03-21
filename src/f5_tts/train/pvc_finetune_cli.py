@@ -22,7 +22,7 @@ from f5_tts.peft.io import save_adapter
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="PVC fine-tuning with LoRA + Prompt Adapter")
+    parser = argparse.ArgumentParser(description="PVC fine-tuning with DiT LoRA + Prompt Adapter + Conditioning Adapter")
 
     parser.add_argument(
         "--exp_name",
@@ -85,6 +85,15 @@ def parse_args():
     parser.add_argument("--lora_alpha", type=float, default=16.0)
     parser.add_argument("--lora_dropout", type=float, default=0.05)
     parser.add_argument("--prompt_drop_path", type=float, default=0.3)
+    parser.add_argument(
+        "--conditioning_adapter",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Enable Conditioning Adapter on ConvNeXtV2 depth-wise conv layers in text embedding.",
+    )
+    parser.add_argument("--conditioning_gamma", type=float, default=0.25)
+    parser.add_argument("--conditioning_kernel_size", type=int, default=3)
+    parser.add_argument("--conditioning_se_reduction", type=int, default=4)
 
     parser.add_argument("--output_root", type=str, default="lora")
 
@@ -173,12 +182,29 @@ def save_adapter_from_ema_checkpoint(checkpoint_file: str, output_dir: Path, ada
 
     adapter_state = {}
     prefix = "ema_model."
+    cond_suffixes = (
+        ".pw_down.weight",
+        ".dw.weight",
+        ".pw_up.weight",
+        ".se.reduce.weight",
+        ".se.reduce.bias",
+        ".se.expand.weight",
+        ".se.expand.bias",
+    )
     for key, value in ema_state.items():
         if not key.startswith(prefix):
             continue
         stripped = key[len(prefix) :]
         if stripped.endswith(".lora_A") or stripped.endswith(".lora_B"):
             adapter_state[stripped] = value.detach().cpu().contiguous()
+            continue
+
+        for suffix in cond_suffixes:
+            if stripped.endswith(suffix):
+                module_name = stripped[: -len(suffix)]
+                adapter_key = f"{module_name}.cond.{suffix.lstrip('.')}"
+                adapter_state[adapter_key] = value.detach().cpu().contiguous()
+                break
 
     if not adapter_state:
         return False
@@ -257,6 +283,10 @@ def main():
         alpha=args.lora_alpha,
         lora_dropout=args.lora_dropout,
         prompt_drop_path=args.prompt_drop_path,
+        conditioning_enabled=bool(args.conditioning_adapter),
+        conditioning_gamma=args.conditioning_gamma,
+        conditioning_kernel_size=args.conditioning_kernel_size,
+        conditioning_se_reduction=args.conditioning_se_reduction,
     )
     injected = apply_pvc_adapters(model, peft_cfg)
     total_params, trainable_params = count_parameters(model)

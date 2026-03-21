@@ -1,3 +1,4 @@
+from f5_tts.peft.conditioning import ConditioningConvAdapter
 from f5_tts.peft.inject import (
     PVCAdapterConfig,
     apply_pvc_adapters,
@@ -19,6 +20,7 @@ from f5_tts.peft.prompt_adapter import PromptAdapterConfig
 
 __all__ = [
     "LoRALinear",
+    "ConditioningConvAdapter",
     "PromptAdapterConfig",
     "PVCAdapterConfig",
     "apply_pvc_adapters",

@@ -6,6 +6,7 @@ import hashlib
 
 from safetensors.torch import load_file, save_file
 
+from f5_tts.peft.conditioning import ConditioningConvAdapter
 from f5_tts.peft.lora import LoRALinear
 
 
@@ -15,8 +16,11 @@ def extract_adapter_state_dict(model):
         if isinstance(module, LoRALinear):
             state[f"{name}.lora_A"] = module.lora_A.detach().cpu().contiguous()
             state[f"{name}.lora_B"] = module.lora_B.detach().cpu().contiguous()
+        elif isinstance(module, ConditioningConvAdapter):
+            for key, value in module.export_adapter_state().items():
+                state[f"{name}.cond.{key}"] = value
     if not state:
-        raise RuntimeError("No LoRALinear modules found. Did you inject adapters before saving?")
+        raise RuntimeError("No adapter modules found. Did you inject adapters before saving?")
     return state
 
 
@@ -52,18 +56,28 @@ def load_adapter_state(adapter_dir: str, device: str = "cpu"):
 def apply_adapter_state(model, state, config: dict | None = None, strict: bool = True):
     missing = []
     consumed = set()
+    has_conditioning_state = any(".cond." in key for key in state.keys())
     for name, module in model.named_modules():
-        if not isinstance(module, LoRALinear):
-            continue
-        key_a = f"{name}.lora_A"
-        key_b = f"{name}.lora_B"
-        if key_a not in state or key_b not in state:
-            missing.append(name)
-            continue
-        module.lora_A.data.copy_(state[key_a].to(device=module.lora_A.device, dtype=module.lora_A.dtype))
-        module.lora_B.data.copy_(state[key_b].to(device=module.lora_B.device, dtype=module.lora_B.dtype))
-        consumed.add(key_a)
-        consumed.add(key_b)
+        if isinstance(module, LoRALinear):
+            key_a = f"{name}.lora_A"
+            key_b = f"{name}.lora_B"
+            if key_a not in state or key_b not in state:
+                missing.append(name)
+                continue
+            module.lora_A.data.copy_(state[key_a].to(device=module.lora_A.device, dtype=module.lora_A.dtype))
+            module.lora_B.data.copy_(state[key_b].to(device=module.lora_B.device, dtype=module.lora_B.dtype))
+            consumed.add(key_a)
+            consumed.add(key_b)
+        elif isinstance(module, ConditioningConvAdapter):
+            # Backward compatibility: old adapters may not include conditioning weights.
+            if not has_conditioning_state:
+                module.clear_adapter()
+                continue
+            cond_missing, cond_consumed = module.load_adapter_state(state, prefix=name)
+            if cond_missing:
+                missing.append(name)
+                continue
+            consumed.update(cond_consumed)
 
     unexpected = sorted(k for k in state.keys() if k not in consumed)
     if strict and (missing or unexpected):
@@ -79,6 +93,9 @@ def clear_adapter(model):
         if isinstance(module, LoRALinear):
             module.lora_A.data.zero_()
             module.lora_B.data.zero_()
+            found += 1
+        elif isinstance(module, ConditioningConvAdapter):
+            module.clear_adapter()
             found += 1
     return found
 

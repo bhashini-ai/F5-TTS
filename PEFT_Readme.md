@@ -102,6 +102,10 @@ f5-tts_pvc-finetune-cli \
   --lora_alpha 16 \
   --lora_dropout 0.05 \
   --prompt_drop_path 0.3 \
+  --conditioning_adapter \
+  --conditioning_gamma 0.25 \
+  --conditioning_kernel_size 3 \
+  --conditioning_se_reduction 4 \
   --learning_rate 1e-5 \
   --batch_size_per_gpu 3200 \
   --batch_size_type frame \
@@ -113,6 +117,7 @@ Optional knobs:
 - `--base_ckpt /abs/path/model_1250000.safetensors` to pin a local base checkpoint
 - `--use_ema/--no-use_ema`
 - `--checkpoint_dir /abs/path/ckpts/pvc_speaker_001`
+- `--no-conditioning_adapter` to disable conditioning adapter for legacy compatibility experiments
 
 Output artifacts:
 
@@ -260,6 +265,7 @@ For each checkpoint and strength:
 3. Inject PEFT modules:
    - Prompt adapter LoRA at input projection
    - DiT LoRA on attention targets (Q/V via configured regex)
+   - Conditioning adapter on ConvNeXtV2 text-embedding depth-wise conv layers (`text_embed.text_blocks.*.dwconv`)
 4. Train only adapter params with existing Trainer loop.
 5. Export only LoRA weights + config metadata.
 
@@ -309,6 +315,7 @@ Key parameters:
 - `adapter_cache_size_cpu`
 - `strict_adapter`
 - `log_metrics_every_n_requests`
+- `conditioning_enabled` / `conditioning_gamma` / `conditioning_kernel_size` / `conditioning_se_reduction`
 
 ### 8.3 Start Triton (example)
 
