@@ -151,9 +151,109 @@ If strict mode is on and metadata mismatches (or missing), load fails fast.
 
 ---
 
-## 6) What Happens Internally (Training + Inference)
+## 6) Multilingual Retention Features (New)
 
-### 6.1 Training internals (PVC fine-tune)
+You now have two practical controls to keep PVC quality high while reducing cross-lingual regression.
+
+### 6.1 Feature A: `lora_strength` at inference time
+
+`lora_strength` controls how strongly the speaker adapter influences generation:
+- `0.0` = base model behavior (adapter effectively off)
+- `1.0` = full adapter behavior
+- between `0.0` and `1.0` = blend
+
+Use it when:
+- PVC voice similarity is excellent in speaker language
+- but Hindi (or another language) pronunciation/prosody regresses
+
+Example:
+
+```bash
+f5-tts_infer-cli \
+  --model F5TTS_v1_Base \
+  --ckpt_file /abs/path/model_remapped.safetensors \
+  --vocab_file /abs/path/vocab.txt \
+  --adapter_dir /abs/path/lora/speaker_001 \
+  --lora_strength 0.75 \
+  --model_dtype float32 \
+  --ref_audio /abs/path/ref_kn.wav \
+  --ref_text "ಕನ್ನಡ ಉಲ್ಲೇಖ ವಾಕ್ಯ." \
+  --gen_text "हिंदी लक्ष्य वाक्य।"
+```
+
+If you hit `NaN/Inf` mel errors, first try `--model_dtype float32`.
+
+### 6.2 Feature B: Distillation anchors during PVC training
+
+Distillation anchors regularize LoRA so it keeps more base-model multilingual behavior.
+
+How it works (high level):
+1. For some updates, sample anchor text lines.
+2. Run base behavior with LoRA temporarily set to `0.0`.
+3. Run student behavior with LoRA active.
+4. Add an MSE distillation loss so LoRA does not drift too far from base multilingual priors.
+
+Training command:
+
+```bash
+f5-tts_pvc-finetune-cli \
+  --exp_name F5TTS_v1_Base \
+  --base_ckpt /abs/path/model_remapped.safetensors \
+  --dataset_path /abs/path/data/speaker_001_pvc \
+  --speaker_id speaker_001 \
+  --output_root /abs/path/lora \
+  --distill_weight 0.1 \
+  --distill_prob 0.3 \
+  --distill_anchor_text_file /abs/path/distill_anchor_texts_kn_hi.txt \
+  --distill_student_lora_strength 1.0
+```
+
+Example `distill_anchor_text_file` (`UTF-8`, one line per anchor):
+
+```text
+ಇದು ಕನ್ನಡದಲ್ಲಿ ಸರಳ ಘೋಷಣಾ ವಾಕ್ಯವಾಗಿದೆ.
+ಸ್ವರ, ವ್ಯಂಜನ, ವಿರಾಮ ಚಿಹ್ನೆಗಳೊಂದಿಗೆ ಓದಿ.
+आज मौसम साफ है और यातायात सामान्य है।
+कृपया अगले स्टेशन पर उतरने की तैयारी करें।
+Invoice number 4521 was generated on 14-02-2026.
+ಬೆಂಗಳೂರು से दिल्ली की उड़ान शाम को प्रस्थान करेगी।
+```
+
+Guidelines for effective anchors:
+- Use 200-2000 lines (start with ~500).
+- Mix languages you want to preserve (for your case: Kannada + Hindi).
+- Include punctuation, numerals, dates, abbreviations, and medium-length sentences.
+- Avoid speaker-specific private content; use generic text.
+- Keep transcription-normalized script (no random spelling variants).
+
+Starter hyperparameters:
+- `distill_weight`: `0.05` to `0.2` (start `0.1`)
+- `distill_prob`: `0.2` to `0.5` (start `0.3`)
+- `distill_student_lora_strength`: `1.0`
+
+What difference to expect:
+- Kannada speaker similarity may drop slightly if distillation is too strong.
+- Hindi intelligibility/prosody usually improves vs pure single-language LoRA.
+- Net result is typically better bilingual balance, not absolute max in one language.
+
+### 6.3 How to test quality properly
+
+Use a fixed bilingual evaluation set:
+- 30-50 Kannada target sentences
+- 30-50 Hindi target sentences
+- same reference audio style across experiments
+
+For each checkpoint and strength:
+1. Generate the same fixed Kannada/Hindi eval set with `lora_strength` in `{0.0, 0.25, 0.5, 0.75, 1.0}`.
+2. Compute CER/WER with your preferred local ASR pipeline (or run human transcription checks if GPU budget is tight).
+3. Do listening checks on 10-20 hardest Hindi lines (numbers, names, punctuation).
+4. Select pair: `(checkpoint, lora_strength)` with best objective and acceptable voice similarity.
+
+---
+
+## 7) What Happens Internally (Training + Inference)
+
+### 7.1 Training internals (PVC fine-tune)
 
 1. Load frozen base checkpoint (`F5TTS_v1_Base` by default).
 2. Freeze base model parameters.
@@ -165,7 +265,7 @@ If strict mode is on and metadata mismatches (or missing), load fails fast.
 
 Result: MB-scale speaker artifact, not full-model copy.
 
-### 6.2 Inference internals (local CLI/API)
+### 7.2 Inference internals (local CLI/API)
 
 1. Load shared base model once.
 2. Inject adapter module structure once.
@@ -176,12 +276,12 @@ Switching speaker means switching adapter weights, not reloading base model.
 
 ---
 
-## 7) Deploy PVC to Triton Inference Server
+## 8) Deploy PVC to Triton Inference Server
 
 PVC runtime is a separate Triton Python backend route:
 - `src/f5_tts/runtime/triton_pvc/model_repo_f5_tts_pvc/f5_tts_pvc`
 
-### 7.1 Expected serving layout
+### 8.1 Expected serving layout
 
 ```text
 /models/
@@ -198,7 +298,7 @@ PVC runtime is a separate Triton Python backend route:
       adapter_config.json
 ```
 
-### 7.2 Configure `config.pbtxt`
+### 8.2 Configure `config.pbtxt`
 
 Key parameters:
 - `model_name`
@@ -210,7 +310,7 @@ Key parameters:
 - `strict_adapter`
 - `log_metrics_every_n_requests`
 
-### 7.3 Start Triton (example)
+### 8.3 Start Triton (example)
 
 Use a Triton image with Python backend, mount model repo and adapter dir.
 Ensure `f5_tts` Python package + dependencies are installed in server environment.
@@ -229,7 +329,7 @@ If your container does not already include this repo as importable package, inst
 pip install -e /abs/path/F5-TTS-BhashiniAI
 ```
 
-### 7.4 Triton PVC runtime flow
+### 8.4 Triton PVC runtime flow
 
 Per request:
 1. Parse `speaker_id` or `adapter_id` (+ optional `adapter_revision`).
@@ -242,7 +342,7 @@ Per request:
 
 ---
 
-## 8) Call Triton from gRPC Client
+## 9) Call Triton from gRPC Client
 
 Inputs expected by `f5_tts_pvc`:
 - `reference_wav` (FP32)
@@ -302,7 +402,7 @@ sf.write("pvc_out.wav", waveform, 24000)
 
 ---
 
-## 9) Operational Notes and Troubleshooting
+## 10) Operational Notes and Troubleshooting
 
 - Keep adapter and base checkpoint aligned. If base checkpoint changes, retrain or re-export adapters.
 - If strict compatibility fails, inspect `adapter_config.json` fields:
@@ -316,7 +416,7 @@ sf.write("pvc_out.wav", waveform, 24000)
 
 ---
 
-## 10) End-to-End Command Sequence (Copy/Paste)
+## 11) End-to-End Command Sequence (Copy/Paste)
 
 ```bash
 # 1) Prepare dataset from CSV

@@ -30,6 +30,7 @@ class LoRALinear(nn.Module):
         self.rank = rank
         self.alpha = float(alpha)
         self.scaling = self.alpha / self.rank
+        self.runtime_scale = 1.0
         self.merged = False
 
         self.lora_dropout = nn.Dropout(lora_dropout) if lora_dropout > 0 else nn.Identity()
@@ -52,7 +53,7 @@ class LoRALinear(nn.Module):
 
         lora = F.linear(self.lora_dropout(x), self.lora_A)
         lora = F.linear(lora, self.lora_B)
-        lora = self.branch_drop(lora * self.scaling)
+        lora = self.branch_drop(lora * (self.scaling * self.runtime_scale))
         return out + lora
 
     @torch.no_grad()

@@ -38,6 +38,7 @@ from f5_tts.peft import (
     check_adapter_compatibility,
     file_sha256,
     load_adapter as load_pvc_adapter,
+    set_lora_strength,
 )
 
 
@@ -199,6 +200,11 @@ parser.add_argument(
     type=str,
     help="Path to a PVC LoRA adapter directory containing adapter_model.safetensors and adapter_config.json",
 )
+parser.add_argument(
+    "--lora_strength",
+    type=float,
+    help="Runtime LoRA strength multiplier. 1.0 = full adapter, 0.0 = base behavior.",
+)
 args = parser.parse_args()
 
 
@@ -249,6 +255,7 @@ fix_duration = args.fix_duration or config.get("fix_duration", fix_duration)
 device = args.device or config.get("device", device)
 model_dtype_name = args.model_dtype or config.get("model_dtype", "auto")
 adapter_dir = args.adapter_dir or config.get("adapter_dir", "")
+lora_strength = args.lora_strength if args.lora_strength is not None else config.get("lora_strength", 1.0)
 
 
 # patches for pip pkg user
@@ -375,6 +382,8 @@ if adapter_dir:
 
     apply_pvc_adapters(ema_model, adapter_cfg)
     load_info = load_pvc_adapter(ema_model, adapter_dir, strict=True)
+    updated = set_lora_strength(ema_model, lora_strength)
+    print(f"Applied LoRA strength: {lora_strength} on {updated} LoRA modules")
     print(f"Loaded PVC adapter from: {adapter_dir}")
     if load_info["missing_modules"] or load_info["unexpected_keys"]:
         print(f"Adapter load warnings: {load_info}")

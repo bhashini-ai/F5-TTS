@@ -105,3 +105,13 @@ def count_parameters(model: nn.Module):
     total = sum(p.numel() for p in model.parameters())
     trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
     return total, trainable
+
+
+def set_lora_strength(model: nn.Module, strength: float):
+    strength = float(strength)
+    updated = 0
+    for _, module in model.named_modules():
+        if isinstance(module, LoRALinear):
+            module.runtime_scale = strength
+            updated += 1
+    return updated

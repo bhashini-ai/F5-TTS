@@ -1,4 +1,10 @@
-from f5_tts.peft.inject import PVCAdapterConfig, apply_pvc_adapters, count_parameters, freeze_model_parameters
+from f5_tts.peft.inject import (
+    PVCAdapterConfig,
+    apply_pvc_adapters,
+    count_parameters,
+    freeze_model_parameters,
+    set_lora_strength,
+)
 from f5_tts.peft.io import (
     apply_adapter_state,
     check_adapter_compatibility,
@@ -18,6 +24,7 @@ __all__ = [
     "apply_pvc_adapters",
     "freeze_model_parameters",
     "count_parameters",
+    "set_lora_strength",
     "save_adapter",
     "load_adapter",
     "load_adapter_state",

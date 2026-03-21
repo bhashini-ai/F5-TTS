@@ -27,6 +27,7 @@ from f5_tts.peft import (
     clear_adapter,
     file_sha256,
     load_adapter as load_pvc_adapter,
+    set_lora_strength,
 )
 
 
@@ -99,6 +100,7 @@ class F5TTS:
         self.active_adapter_dir = None
         self.active_adapter_metadata = {}
         self.active_adapter_strict = True
+        self.active_lora_strength = 1.0
 
     def transcribe(self, ref_audio, language=None):
         return transcribe(ref_audio, language)
@@ -138,7 +140,7 @@ class F5TTS:
         apply_pvc_adapters(self.ema_model, adapter_cfg)
         self.adapter_injected = True
 
-    def load_adapter(self, adapter_dir, strict=True):
+    def load_adapter(self, adapter_dir, strict=True, lora_strength=1.0):
         adapter_dir = os.path.abspath(adapter_dir)
         payload = self._read_adapter_config(adapter_dir)
         check_adapter_compatibility(
@@ -150,9 +152,11 @@ class F5TTS:
         adapter_cfg = self._build_adapter_cfg_from_payload(payload)
         self._ensure_adapter_modules(adapter_cfg)
         info = load_pvc_adapter(self.ema_model, adapter_dir, strict=strict)
+        set_lora_strength(self.ema_model, lora_strength)
         self.active_adapter_dir = adapter_dir
         self.active_adapter_metadata = info
         self.active_adapter_strict = strict
+        self.active_lora_strength = float(lora_strength)
         return info
 
     def unload_adapter(self):
@@ -171,6 +175,7 @@ class F5TTS:
         ref_text,
         gen_text,
         speaker_adapter=None,
+        lora_strength=None,
         show_info=print,
         progress=tqdm,
         target_rms=0.1,
@@ -193,7 +198,11 @@ class F5TTS:
         if speaker_adapter:
             speaker_adapter = os.path.abspath(speaker_adapter)
             if self.active_adapter_dir != speaker_adapter:
-                self.load_adapter(speaker_adapter, strict=self.active_adapter_strict)
+                target_strength = self.active_lora_strength if lora_strength is None else lora_strength
+                self.load_adapter(speaker_adapter, strict=self.active_adapter_strict, lora_strength=target_strength)
+            elif lora_strength is not None:
+                set_lora_strength(self.ema_model, lora_strength)
+                self.active_lora_strength = float(lora_strength)
 
         ref_file, ref_text = preprocess_ref_audio_text(ref_file, ref_text, show_info=show_info)
 

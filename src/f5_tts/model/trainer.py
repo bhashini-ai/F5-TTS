@@ -3,8 +3,10 @@ from __future__ import annotations
 import gc
 import math
 import os
+import random as pyrandom
 
 import torch
+import torch.nn.functional as F
 import torchaudio
 import wandb
 from accelerate import Accelerator
@@ -18,6 +20,7 @@ from tqdm import tqdm
 from f5_tts.model import CFM
 from f5_tts.model.dataset import DynamicBatchSampler, collate_fn
 from f5_tts.model.utils import default, exists
+from f5_tts.peft import set_lora_strength
 
 
 # trainer
@@ -54,6 +57,10 @@ class Trainer:
         local_vocoder_path: str = "",  # local vocoder path
         model_cfg_dict: dict = dict(),  # training config
         checkpoint_callback=None,  # callable(trainer, update, last, checkpoint_file)
+        distill_weight: float = 0.0,
+        distill_prob: float = 0.0,
+        distill_anchor_texts: list[str] | None = None,
+        distill_student_lora_strength: float = 1.0,
     ):
         ddp_kwargs = DistributedDataParallelKwargs(find_unused_parameters=True)
 
@@ -87,6 +94,9 @@ class Trainer:
                     "max_grad_norm": max_grad_norm,
                     "noise_scheduler": noise_scheduler,
                     "bnb_optimizer": bnb_optimizer,
+                    "distill_weight": distill_weight,
+                    "distill_prob": distill_prob,
+                    "distill_student_lora_strength": distill_student_lora_strength,
                 }
             model_cfg_dict["gpus"] = self.accelerator.num_processes
             self.accelerator.init_trackers(
@@ -136,6 +146,11 @@ class Trainer:
 
         self.duration_predictor = duration_predictor
         self.checkpoint_callback = checkpoint_callback
+        self.distill_weight = float(distill_weight)
+        self.distill_prob = float(distill_prob)
+        self.distill_anchor_texts = distill_anchor_texts or []
+        self.distill_student_lora_strength = float(distill_student_lora_strength)
+        self.distill_enabled = self.distill_weight > 0 and len(self.distill_anchor_texts) > 0 and self.distill_prob > 0
 
         trainable_params = [p for p in model.parameters() if p.requires_grad]
         if not trainable_params:
@@ -389,6 +404,42 @@ class Trainer:
                     loss, cond, pred = self.model(
                         mel_spec, text=text_inputs, lens=mel_lengths, noise_scheduler=self.noise_scheduler
                     )
+
+                    distill_loss = None
+                    if self.distill_enabled and pyrandom.random() < self.distill_prob:
+                        anchor_text_inputs = [
+                            self.distill_anchor_texts[pyrandom.randrange(len(self.distill_anchor_texts))]
+                            for _ in range(len(text_inputs))
+                        ]
+
+                        # Ensure teacher/student passes use identical stochastic path (same t/noise/mask).
+                        cpu_rng_state = torch.get_rng_state()
+                        cuda_rng_state = torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None
+                        model_unwrapped = self.accelerator.unwrap_model(self.model)
+
+                        set_lora_strength(model_unwrapped, 0.0)
+                        with torch.no_grad():
+                            _, _, base_pred = self.model(
+                                mel_spec,
+                                text=anchor_text_inputs,
+                                lens=mel_lengths,
+                                noise_scheduler=self.noise_scheduler,
+                            )
+
+                        torch.set_rng_state(cpu_rng_state)
+                        if cuda_rng_state is not None:
+                            torch.cuda.set_rng_state_all(cuda_rng_state)
+
+                        set_lora_strength(model_unwrapped, self.distill_student_lora_strength)
+                        _, _, student_anchor_pred = self.model(
+                            mel_spec,
+                            text=anchor_text_inputs,
+                            lens=mel_lengths,
+                            noise_scheduler=self.noise_scheduler,
+                        )
+                        distill_loss = F.mse_loss(student_anchor_pred, base_pred.detach())
+                        loss = loss + self.distill_weight * distill_loss
+
                     self.accelerator.backward(loss)
 
                     if self.max_grad_norm > 0 and self.accelerator.sync_gradients:
@@ -409,12 +460,15 @@ class Trainer:
                     progress_bar.set_postfix(update=str(global_update), loss=loss.item())
 
                 if self.accelerator.is_local_main_process:
-                    self.accelerator.log(
-                        {"loss": loss.item(), "lr": self.scheduler.get_last_lr()[0]}, step=global_update
-                    )
+                    metrics = {"loss": loss.item(), "lr": self.scheduler.get_last_lr()[0]}
+                    if distill_loss is not None:
+                        metrics["distill_loss"] = distill_loss.item()
+                    self.accelerator.log(metrics, step=global_update)
                 if self.logger == "tensorboard" and self.accelerator.is_main_process:
                     self.writer.add_scalar("loss", loss.item(), global_update)
                     self.writer.add_scalar("lr", self.scheduler.get_last_lr()[0], global_update)
+                    if distill_loss is not None:
+                        self.writer.add_scalar("distill_loss", distill_loss.item(), global_update)
 
                 if global_update % self.last_per_updates == 0 and self.accelerator.sync_gradients:
                     epoch_avg_loss = epoch_loss_sum / max(1, epoch_loss_updates)

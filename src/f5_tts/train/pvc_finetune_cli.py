@@ -56,6 +56,30 @@ def parse_args():
     parser.add_argument("--seed", type=int, default=666)
     parser.add_argument("--logger", type=str, default="none", choices=["none", "wandb", "tensorboard"])
     parser.add_argument("--checkpoint_dir", type=str, default="")
+    parser.add_argument(
+        "--distill_weight",
+        type=float,
+        default=0.0,
+        help="Weight for multilingual retention distillation loss (0 disables distillation).",
+    )
+    parser.add_argument(
+        "--distill_prob",
+        type=float,
+        default=0.0,
+        help="Probability of applying distillation on a training update.",
+    )
+    parser.add_argument(
+        "--distill_anchor_text_file",
+        type=str,
+        default="",
+        help="UTF-8 text file with multilingual anchor texts (one line per anchor).",
+    )
+    parser.add_argument(
+        "--distill_student_lora_strength",
+        type=float,
+        default=1.0,
+        help="LoRA strength used for the student pass during distillation.",
+    )
 
     parser.add_argument("--lora_rank", type=int, default=16)
     parser.add_argument("--lora_alpha", type=float, default=16.0)
@@ -124,6 +148,12 @@ def build_adapter_metadata(
         "trainable_params": trainable_params,
         "total_params": total_params,
         "sample_rate": int(mel_spec_kwargs.target_sample_rate),
+        "distill": {
+            "weight": args.distill_weight,
+            "prob": args.distill_prob,
+            "anchor_text_file": args.distill_anchor_text_file,
+            "student_lora_strength": args.distill_student_lora_strength,
+        },
     }
     if checkpoint_update is not None:
         payload["checkpoint_update"] = int(checkpoint_update)
@@ -158,6 +188,23 @@ def save_adapter_from_ema_checkpoint(checkpoint_file: str, output_dir: Path, ada
     with open(output_dir / "adapter_config.json", "w", encoding="utf-8") as f:
         json.dump({"format_version": 1, **adapter_config}, f, indent=2, ensure_ascii=False)
     return True
+
+
+def load_anchor_texts(anchor_text_file: str):
+    if not anchor_text_file:
+        return []
+    path = Path(anchor_text_file).expanduser().resolve()
+    if not path.exists():
+        raise FileNotFoundError(f"Missing --distill_anchor_text_file: {path}")
+    texts = []
+    with open(path, "r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if line:
+                texts.append(line)
+    if not texts:
+        raise ValueError(f"No usable anchor texts found in: {path}")
+    return texts
 
 
 def main():
@@ -217,6 +264,15 @@ def main():
     print(f"Trainable params: {trainable_params:,} ({100.0 * trainable_params / total_params:.4f}%)")
 
     logger = None if args.logger == "none" else args.logger
+    distill_anchor_texts = load_anchor_texts(args.distill_anchor_text_file)
+    if args.distill_weight > 0 and distill_anchor_texts:
+        print(
+            "Distillation enabled: "
+            f"weight={args.distill_weight}, prob={args.distill_prob}, anchors={len(distill_anchor_texts)}"
+        )
+    elif args.distill_weight > 0:
+        print("Distillation requested but anchor text file is empty. Distillation will be disabled.")
+
     checkpoint_dir = args.checkpoint_dir or str(files("f5_tts").joinpath(f"../../ckpts/pvc_{args.speaker_id}"))
     periodic_adapter_root = Path(checkpoint_dir).expanduser().resolve() / "lora_adapters"
     periodic_exported_updates = set()
@@ -269,6 +325,10 @@ def main():
         last_per_updates=args.last_per_updates,
         mel_spec_type=mel_spec_kwargs.mel_spec_type,
         checkpoint_callback=on_checkpoint_saved,
+        distill_weight=args.distill_weight,
+        distill_prob=args.distill_prob,
+        distill_anchor_texts=distill_anchor_texts,
+        distill_student_lora_strength=args.distill_student_lora_strength,
     )
 
     train_dataset = load_dataset(
