@@ -69,6 +69,12 @@ input [
     data_type: TYPE_STRING
     dims: [1]
     optional: True
+  },
+  {
+    name: "generated_audio_duration"
+    data_type: TYPE_FP32
+    dims: [1]
+    optional: True
   }
 ]
 output [

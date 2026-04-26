@@ -75,6 +75,12 @@ def get_args():
         default="tests/client_http.wav",
         help="Path to save the output audio",
     )
+    parser.add_argument(
+        "--generated-audio-duration",
+        type=float,
+        default=None,
+        help="Optional expected duration of generated-audio in seconds.",
+    )
     return parser.parse_args()
 
 
@@ -82,6 +88,7 @@ def prepare_request(
     waveform,
     reference_text,
     target_text,
+    generated_audio_duration=None,
     sample_rate=24000,
     audio_save_dir: str = "./",
 ):
@@ -102,6 +109,17 @@ def prepare_request(
             {"name": "target_text", "shape": [1, 1], "datatype": "BYTES", "data": [target_text]},
         ]
     }
+
+    if generated_audio_duration is not None:
+        duration = np.array([[generated_audio_duration]], dtype=np.float32)
+        data["inputs"].append(
+            {
+                "name": "generated_audio_duration",
+                "shape": list(duration.shape),
+                "datatype": "FP32",
+                "data": duration.tolist(),
+            }
+        )
 
     return data
 
@@ -131,7 +149,12 @@ if __name__ == "__main__":
     assert sr == 24000, "sample rate hardcoded in server"
 
     waveform = np.array(waveform, dtype=np.float32)
-    data = prepare_request(waveform, args.reference_text, args.target_text)
+    data = prepare_request(
+        waveform,
+        args.reference_text,
+        args.target_text,
+        generated_audio_duration=args.generated_audio_duration,
+    )
 
     rsp = requests.post(
         url, headers={"Content-Type": "application/json"}, json=data, verify=False, params={"request_id": "0"}

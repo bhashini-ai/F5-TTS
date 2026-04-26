@@ -107,6 +107,17 @@ def list_str_to_idx(
 
 
 class TritonPythonModel:
+    def _decode_optional_scalar_float(self, request, name: str):
+        tensor = pb_utils.get_input_tensor_by_name(request, name)
+        if tensor is None:
+            return None
+
+        value = from_dlpack(tensor.to_dlpack()).reshape(-1)[0].item()
+        value = float(value)
+        if value <= 0:
+            raise pb_utils.TritonModelException(f"{name} must be > 0, got {value}")
+        return value
+
     def initialize(self, args):
         self.use_perf = True
         self.device = torch.device("cuda")
@@ -272,6 +283,7 @@ class TritonPythonModel:
             target_text = pb_utils.get_input_tensor_by_name(request, "target_text").as_numpy()
             target_text = target_text[0][0].decode("utf-8")
             request_vocoder = self._decode_request_vocoder(request)
+            request_generated_audio_duration = self._decode_optional_scalar_float(request, "generated_audio_duration")
             request_vocoders.append(request_vocoder)
 
             text = reference_text + target_text
@@ -298,11 +310,14 @@ class TritonPythonModel:
             mel_features_list.append(mel_features)
 
             reference_mel_len.append(mel_features.shape[1])
-            estimated_reference_target_mel_len.append(
-                int(
+            if request_generated_audio_duration is not None:
+                generated_mel_len = int(request_generated_audio_duration * self.target_audio_sample_rate / self.hop_length)
+                estimated_len = mel_features.shape[1] + generated_mel_len
+            else:
+                estimated_len = int(
                     mel_features.shape[1] * (1 + len(target_text.encode("utf-8")) / len(reference_text.encode("utf-8")))
                 )
-            )
+            estimated_reference_target_mel_len.append(estimated_len)
 
         max_seq_len = min(max(estimated_reference_target_mel_len), self.max_mel_len)
 
